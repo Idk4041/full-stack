@@ -98,6 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <br>
       <select name="rol">
         <option value="gebruiker" <?php if ($rol === "gebruiker") echo "selected"; ?>>Gebruiker</option>
+        <option value="werknemer" <?php if ($rol === "werknemer") echo "selected"; ?>>Werknemer</option>
         <option value="admin" <?php if ($rol === "admin") echo "selected"; ?>>Admin</option>
       </select>
       <div id="loginRegister">

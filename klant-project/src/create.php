@@ -60,6 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <br>
       <select name="rol">
         <option value="gebruiker">Gebruiker</option>
+        <option value="werknemer">Werknemer</option>
         <option value="admin">Admin</option>
       </select>
       <div id="loginRegister">

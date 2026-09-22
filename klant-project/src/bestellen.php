@@ -5,7 +5,7 @@ $conn = require_once "partials/dbconnection.php";
 $error = "";
 $geplaatsteBestelling = null;
 
-
+// Voorraad per product/kleur ophalen.
 $voorraadPerProduct = [];
 $stockResult = $conn->query("SELECT `soort leer` AS product, kleur, gewicht FROM voorraad WHERE bestelling IS NULL");
 while ($row = $stockResult->fetch_assoc()) {
@@ -22,22 +22,37 @@ while ($row = $stockResult->fetch_assoc()) {
   $voorraadPerProduct[$product][$kleur] += $gewicht;
 }
 
+// Bestaande klanten ophalen voor de keuzelijst.
+$klanten = [];
+$klantenResult = $conn->query("SELECT klantid, bedrijfsnaam, telefoonnummer, email FROM klant ORDER BY bedrijfsnaam");
+while ($row = $klantenResult->fetch_assoc()) {
+  $klanten[$row['klantid']] = $row;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  $klantKeuze = $_POST['klant_keuze'] ?? '';
   $bedrijfsnaam = trim($_POST['bedrijfsnaam'] ?? '');
   $telefoonnummer = trim($_POST['telefoonnummer'] ?? '');
   $email = trim($_POST['email'] ?? '');
   $product = $_POST['product'] ?? '';
   $kleur = $_POST['kleur'] ?? '';
   $hoeveelheid = trim($_POST['hoeveelheid'] ?? '');
-  $besteldatum = $_POST['besteldatum'] ?? '';
+  $besteldatum = date('Y-m-d');
 
   $beschikbaar = $voorraadPerProduct[$product][$kleur] ?? null;
 
-  if ($bedrijfsnaam === '') {
+  $isNieuweKlant = ($klantKeuze === 'nieuw');
+  $isBestaandeKlant = ($klantKeuze !== '' && $klantKeuze !== 'nieuw' && isset($klanten[$klantKeuze]));
+
+  if ($klantKeuze === '' || (!$isNieuweKlant && !$isBestaandeKlant)) {
+    $error = "Kies een klant uit de lijst of voeg een nieuwe klant toe.";
+  } elseif ($isNieuweKlant && $bedrijfsnaam === '') {
     $error = "Bedrijfsnaam is verplicht.";
-  } elseif ($telefoonnummer === '' || !ctype_digit($telefoonnummer)) {
-    $error = "Vul een geldig telefoonnummer in.";
-  } elseif ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+  } elseif ($isNieuweKlant && ($telefoonnummer === '' || !ctype_digit($telefoonnummer))) {
+    $error = "Vul een geldig telefoonnummer in (alleen cijfers).";
+  } elseif ($isNieuweKlant && strlen($telefoonnummer) > 10) {
+    $error = "Telefoonnummer is te lang: gebruik maximaal 10 cijfers, zonder spaties of +31.";
+  } elseif ($isNieuweKlant && ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL))) {
     $error = "Vul een geldig e-mailadres in.";
   } elseif ($product === '' || !isset($voorraadPerProduct[$product])) {
     $error = "Kies een geldig product.";
@@ -47,31 +62,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $error = "Vul een geldige hoeveelheid in kg in.";
   } elseif ((float) $hoeveelheid > $beschikbaar) {
     $error = "Er is niet genoeg voorraad: maximaal " . number_format($beschikbaar, 2) . " kg beschikbaar voor deze combinatie.";
-  } elseif ($besteldatum === '') {
-    $error = "Besteldatum is verplicht.";
   } else {
     $hoeveelheidKg = number_format((float) $hoeveelheid, 2, '.', '');
 
-    // Bestaande klant zoeken op e-mailadres, anders nieuwe klant aanmaken.
-    $stmt = $conn->prepare("SELECT klantid FROM klant WHERE email = ?");
-    $stmt->bind_param("s", $email);
-    $stmt->execute();
-    $klantResult = $stmt->get_result();
-    $klantRow = $klantResult->fetch_assoc();
-    $stmt->close();
-
-    if ($klantRow) {
-      $klantId = $klantRow['klantid'];
-      $stmt = $conn->prepare("UPDATE klant SET bedrijfsnaam = ?, telefoonnummer = ? WHERE klantid = ?");
-      $stmt->bind_param("sii", $bedrijfsnaam, $telefoonnummer, $klantId);
-      $stmt->execute();
-      $stmt->close();
+    if ($isBestaandeKlant) {
+      $klantId = (int) $klantKeuze;
+      $bedrijfsnaamWeergave = $klanten[$klantKeuze]['bedrijfsnaam'];
     } else {
-      $stmt = $conn->prepare("INSERT INTO klant (bedrijfsnaam, telefoonnummer, email) VALUES (?, ?, ?)");
-      $stmt->bind_param("sis", $bedrijfsnaam, $telefoonnummer, $email);
+      // Nieuwe klant: bestaat er al iemand met dit e-mailadres? Zo ja, gegevens bijwerken.
+      $stmt = $conn->prepare("SELECT klantid FROM klant WHERE email = ?");
+      $stmt->bind_param("s", $email);
       $stmt->execute();
-      $klantId = $stmt->insert_id;
+      $klantResult = $stmt->get_result();
+      $klantRow = $klantResult->fetch_assoc();
       $stmt->close();
+
+      if ($klantRow) {
+        $klantId = $klantRow['klantid'];
+        $stmt = $conn->prepare("UPDATE klant SET bedrijfsnaam = ?, telefoonnummer = ? WHERE klantid = ?");
+        $stmt->bind_param("sii", $bedrijfsnaam, $telefoonnummer, $klantId);
+        $stmt->execute();
+        $stmt->close();
+      } else {
+        $stmt = $conn->prepare("INSERT INTO klant (bedrijfsnaam, telefoonnummer, email) VALUES (?, ?, ?)");
+        $stmt->bind_param("sis", $bedrijfsnaam, $telefoonnummer, $email);
+        $stmt->execute();
+        $klantId = $stmt->insert_id;
+        $stmt->close();
+      }
+      $bedrijfsnaamWeergave = $bedrijfsnaam;
     }
 
     $status = "nieuw";
@@ -81,10 +100,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $nieuwId = $stmt->insert_id;
     $stmt->close();
 
-    // Alleen de zojuist geplaatste bestelling tonen, geen andere bestellingen.
+    // Alleen de geplaatste bestelling tonen
     $geplaatsteBestelling = [
       'idbestelling' => $nieuwId,
-      'bedrijfsnaam' => $bedrijfsnaam,
+      'bedrijfsnaam' => $bedrijfsnaamWeergave,
       'product' => $product,
       'kleur' => $kleur,
       'hoeveelheid' => $hoeveelheidKg,
@@ -129,17 +148,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php } else { ?>
 
     <form method="POST" action="bestellen.php" id="bestelForm">
-      <label>Bedrijfsnaam</label><br>
-      <input type="text" name="bedrijfsnaam" placeholder="Bedrijfsnaam" required>
+      <label>Klant</label><br>
+      <select id="klantKeuze" name="klant_keuze" required>
+        <option value="">-- Kies klant --</option>
+        <option value="nieuw">+ Nieuwe klant toevoegen</option>
+        <?php foreach ($klanten as $klantid => $klant) { ?>
+          <option value="<?php echo htmlspecialchars($klantid); ?>"><?php echo htmlspecialchars($klant['bedrijfsnaam']); ?></option>
+        <?php } ?>
+      </select>
       <br><br>
 
-      <label>Telefoonnummer</label><br>
-      <input type="text" name="telefoonnummer" placeholder="Telefoonnummer" required>
-      <br><br>
+      <div id="nieuweKlantVelden" style="display:none;">
+        <label>Bedrijfsnaam</label><br>
+        <input type="text" name="bedrijfsnaam" placeholder="Bedrijfsnaam">
+        <br><br>
 
-      <label>E-mailadres</label><br>
-      <input type="email" name="email" placeholder="E-mailadres" required>
-      <br><br>
+        <label>Telefoonnummer</label><br>
+        <input type="text" name="telefoonnummer" placeholder="Telefoonnummer">
+        <br><br>
+
+        <label>E-mailadres</label><br>
+        <input type="email" name="email" placeholder="E-mailadres">
+        <br><br>
+      </div>
 
       <label>Product</label><br>
       <select id="product" name="product" required>
@@ -161,15 +192,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <span id="beschikbaarText" style="margin-left:10px; font-style:italic;"></span>
       <br><br>
 
-      <label>Besteldatum</label><br>
-      <input type="date" name="besteldatum" required>
-      <br><br>
+      <p style="font-style:italic;">De besteldatum wordt automatisch op vandaag gezet.</p>
 
       <input type="submit" value="Bestellen">
     </form>
 
     <script>
       const voorraadData = <?php echo json_encode($voorraadPerProduct); ?>;
+
+      const klantSelect = document.getElementById('klantKeuze');
+      const nieuweKlantVelden = document.getElementById('nieuweKlantVelden');
+      const bedrijfsnaamInput = nieuweKlantVelden.querySelector('input[name="bedrijfsnaam"]');
+      const telefoonInput = nieuweKlantVelden.querySelector('input[name="telefoonnummer"]');
+      const emailInput = nieuweKlantVelden.querySelector('input[name="email"]');
+
+      klantSelect.addEventListener('change', function () {
+        const isNieuw = this.value === 'nieuw';
+        nieuweKlantVelden.style.display = isNieuw ? 'block' : 'none';
+        bedrijfsnaamInput.required = isNieuw;
+        telefoonInput.required = isNieuw;
+        emailInput.required = isNieuw;
+      });
 
       const productSelect = document.getElementById('product');
       const kleurSelect = document.getElementById('kleur');
