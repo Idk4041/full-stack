@@ -23,3 +23,6 @@ test1 tea@test test1234
 
 ## gebruiker login
 test3 test@tea test1234
+
+## werknemer login
+test2 test2@tea test1234
