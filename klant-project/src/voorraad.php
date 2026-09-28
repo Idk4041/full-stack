@@ -179,7 +179,9 @@ if ($actie === '') {
 
  <a href="logout.php">Uitloggen</a>
   <?php if ($magBeheren): ?> | <a href="product.php">Product toevoegen</a><?php endif; ?>
-
+  <form method="GET" action="bestellen.php" style="display:inline; margin-left:10px;">
+    <button type="submit">Bestelling plaatsen</button>
+  </form>
   <!-- Weergave voor de actie 'bewerken'. -->
   <?php if ($actie === 'bewerken'): ?>
 
