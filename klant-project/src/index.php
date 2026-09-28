@@ -5,12 +5,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Students</title>
+  <!-- Stylesheet; css/style.css is niet meegeleverd. -->
   <link rel="stylesheet" href="css/style.css">
 </head>
 
 <body>
 
   <?php
+  // Placeholderpagina: nog geen echte startpagina.
   echo "dit is de index pagina van de klantproject";
   ?>
 

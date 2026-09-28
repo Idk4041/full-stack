@@ -1,7 +1,9 @@
-
+-- NIET NODIG
+-- Voorbeelddatabase 'games'. Dit script maakt NIET de database klanten_project aan; importeer klanten_project.sql apart.
 create database IF NOT EXISTS games;
 use games;
 
+-- Tabel GAMES met o.a. naam, platform, releasedatum en scores.
 CREATE TABLE IF NOT EXISTS `GAMES` (
 `id` INT NOT NULL,
 `name` VARCHAR(45) NOT NULL,
@@ -12,9 +14,11 @@ CREATE TABLE IF NOT EXISTS `GAMES` (
 `userscore` DECIMAL NULL,
 PRIMARY KEY (`id`));
 
+-- Maak `id` automatisch oplopend.
 ALTER TABLE `games`.`GAMES`
 CHANGE COLUMN `id` `id` INT(11) NOT NULL AUTO_INCREMENT ;
 
+-- Voorbeeldrijen.
 INSERT INTO `GAMES`
 (`name`,`platform`,`released`,`summary`,`metascore`,`userscore`)
 VALUES

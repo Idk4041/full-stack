@@ -1,13 +1,19 @@
 <?php
+// bestellen.php: publieke bestelpagina. Klant kiest (of maakt) een klant, product, kleur en hoeveelheid.
+// Controleert de voorraad, maakt evt. een klant aan en slaat de bestelling op in `bestellingen`.
 
+// Databaseverbinding (partials/dbconnection.php, niet meegeleverd) geeft een mysqli-object terug.
 $conn = require_once "partials/dbconnection.php";
 
+// $error: foutmelding voor de gebruiker; $geplaatsteBestelling: gegevens voor het bevestigingsblok.
 $error = "";
 $geplaatsteBestelling = null;
 
 // Voorraad per product/kleur ophalen.
 $voorraadPerProduct = [];
+// Beschikbare voorraad ophalen: alleen rijen die nog niet aan een bestelling gekoppeld zijn (bestelling IS NULL).
 $stockResult = $conn->query("SELECT `soort leer` AS product, kleur, gewicht FROM voorraad WHERE bestelling IS NULL");
+// Gewicht per product (soort leer) en kleur optellen tot [product][kleur] => totaal kg. Let op: gewicht is varchar, (float) haalt het getal eruit.
 while ($row = $stockResult->fetch_assoc()) {
   $product = $row['product'];
   $kleur = $row['kleur'];
@@ -23,12 +29,14 @@ while ($row = $stockResult->fetch_assoc()) {
 }
 
 // Bestaande klanten ophalen voor de keuzelijst.
+// Alle klanten ophalen voor de keuzelijst, geindexeerd op klantid.
 $klanten = [];
 $klantenResult = $conn->query("SELECT klantid, bedrijfsnaam, telefoonnummer, email FROM klant ORDER BY bedrijfsnaam");
 while ($row = $klantenResult->fetch_assoc()) {
   $klanten[$row['klantid']] = $row;
 }
 
+// Formulier verwerken: invoer ophalen en opschonen met trim().
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $klantKeuze = $_POST['klant_keuze'] ?? '';
   $bedrijfsnaam = trim($_POST['bedrijfsnaam'] ?? '');
@@ -37,13 +45,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $product = $_POST['product'] ?? '';
   $kleur = $_POST['kleur'] ?? '';
   $hoeveelheid = trim($_POST['hoeveelheid'] ?? '');
+  // Besteldatum is altijd vandaag (de gebruiker kan dit niet kiezen).
   $besteldatum = date('Y-m-d');
 
+  // Beschikbare kg voor de gekozen combinatie; null als de combinatie niet bestaat.
   $beschikbaar = $voorraadPerProduct[$product][$kleur] ?? null;
 
+  // Bepaal of het om een nieuwe of een bestaande (geldige) klant gaat.
   $isNieuweKlant = ($klantKeuze === 'nieuw');
   $isBestaandeKlant = ($klantKeuze !== '' && $klantKeuze !== 'nieuw' && isset($klanten[$klantKeuze]));
 
+  // Validatieketen: de eerste fout wint. Volgorde: klant, nieuwe-klantvelden, product, kleur, hoeveelheid, voorraad.
   if ($klantKeuze === '' || (!$isNieuweKlant && !$isBestaandeKlant)) {
     $error = "Kies een klant uit de lijst of voeg een nieuwe klant toe.";
   } elseif ($isNieuweKlant && $bedrijfsnaam === '') {
@@ -62,14 +74,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $error = "Vul een geldige hoeveelheid in kg in.";
   } elseif ((float) $hoeveelheid > $beschikbaar) {
     $error = "Er is niet genoeg voorraad: maximaal " . number_format($beschikbaar, 2) . " kg beschikbaar voor deze combinatie.";
+  // Alles geldig: klant bepalen/aanmaken en de bestelling opslaan.
   } else {
     $hoeveelheidKg = number_format((float) $hoeveelheid, 2, '.', '');
 
+    // Bestaande klant: id en naam komen uit de al opgehaalde lijst.
     if ($isBestaandeKlant) {
       $klantId = (int) $klantKeuze;
       $bedrijfsnaamWeergave = $klanten[$klantKeuze]['bedrijfsnaam'];
     } else {
       // Nieuwe klant: bestaat er al iemand met dit e-mailadres? Zo ja, gegevens bijwerken.
+      // Nieuwe klant: bestaat het e-mailadres al? Prepared statement tegen SQL-injectie.
       $stmt = $conn->prepare("SELECT klantid FROM klant WHERE email = ?");
       $stmt->bind_param("s", $email);
       $stmt->execute();
@@ -77,6 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $klantRow = $klantResult->fetch_assoc();
       $stmt->close();
 
+      // E-mail bestaat al: hergebruik die klant en werk bedrijfsnaam/telefoon bij.
       if ($klantRow) {
         $klantId = $klantRow['klantid'];
         $stmt = $conn->prepare("UPDATE klant SET bedrijfsnaam = ?, telefoonnummer = ? WHERE klantid = ?");
@@ -84,6 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute();
         $stmt->close();
       } else {
+        // Anders: nieuwe klant invoegen; insert_id is het nieuwe klantid.
         $stmt = $conn->prepare("INSERT INTO klant (bedrijfsnaam, telefoonnummer, email) VALUES (?, ?, ?)");
         $stmt->bind_param("sis", $bedrijfsnaam, $telefoonnummer, $email);
         $stmt->execute();
@@ -93,7 +110,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $bedrijfsnaamWeergave = $bedrijfsnaam;
     }
 
+    // Elke bestelling begint met status 'nieuw'.
     $status = "nieuw";
+    // Bestelling opslaan. LET OP: de kolom `kleur` staat niet in de tabel `bestellingen` van klanten_project.sql, dus deze query faalt tot die kolom is toegevoegd.
+    // Ook wordt voorraad.bestelling niet bijgewerkt, dus de voorraad daalt niet na een bestelling.
     $stmt = $conn->prepare("INSERT INTO bestellingen (klant, product, kleur, hoeveelheid, status, besteldatum) VALUES (?, ?, ?, ?, ?, ?)");
     $stmt->bind_param("isssss", $klantId, $product, $kleur, $hoeveelheidKg, $status, $besteldatum);
     $stmt->execute();
@@ -101,6 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->close();
 
     // Alleen de geplaatste bestelling tonen
+    // Alleen de zojuist geplaatste bestelling tonen in de bevestiging.
     $geplaatsteBestelling = [
       'idbestelling' => $nieuwId,
       'bedrijfsnaam' => $bedrijfsnaamWeergave,
@@ -113,6 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 ?>
+<!-- HTML-gedeelte: bevestiging of formulier. -->
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -125,8 +147,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <h1>Bestelling plaatsen</h1>
 
+  <!-- Foutmelding (met htmlspecialchars tegen XSS). -->
   <?php if ($error) echo "<p style='color:red;'>" . htmlspecialchars($error) . "</p>"; ?>
 
+  <!-- Bevestigingsblok na een geslaagde bestelling, anders het formulier. -->
   <?php if ($geplaatsteBestelling) { ?>
     <div style="border:1px solid #408A71; padding:15px; margin-bottom:20px;">
       <h2>Bedankt voor je bestelling!</h2>
@@ -147,8 +171,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <p>Er is momenteel geen voorraad beschikbaar om te bestellen.</p>
     <?php } else { ?>
 
+    <!-- Bestelformulier (POST naar dezelfde pagina). -->
     <form method="POST" action="bestellen.php" id="bestelForm">
       <label>Klant</label><br>
+      <!-- Klantkeuze; 'nieuw' toont de extra velden hieronder via JavaScript. -->
       <select id="klantKeuze" name="klant_keuze" required>
         <option value="">-- Kies klant --</option>
         <option value="nieuw">+ Nieuwe klant toevoegen</option>
@@ -158,6 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </select>
       <br><br>
 
+      <!-- Verborgen velden voor een nieuwe klant; worden 'required' zodra ze zichtbaar zijn. -->
       <div id="nieuweKlantVelden" style="display:none;">
         <label>Bedrijfsnaam</label><br>
         <input type="text" name="bedrijfsnaam" placeholder="Bedrijfsnaam">
@@ -173,6 +200,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </div>
 
       <label>Product</label><br>
+      <!-- Producten komen uit de voorraad. De kleuren worden door JavaScript ingevuld. -->
       <select id="product" name="product" required>
         <option value="">-- Kies product --</option>
         <?php foreach (array_keys($voorraadPerProduct) as $productNaam) { ?>
@@ -182,12 +210,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <br><br>
 
       <label>Kleur</label><br>
+      <!-- Wordt gevuld zodra een product gekozen is. -->
       <select id="kleur" name="kleur" required>
         <option value="">-- Eerst product kiezen --</option>
       </select>
       <br><br>
 
       <label>Hoeveelheid (kg)</label><br>
+      <!-- Hoeveelheid in kg; max wordt door JS op de beschikbare voorraad gezet (server controleert dit nogmaals). -->
       <input type="number" id="hoeveelheid" name="hoeveelheid" step="0.01" min="0.01" placeholder="Hoeveelheid in kg" required>
       <span id="beschikbaarText" style="margin-left:10px; font-style:italic;"></span>
       <br><br>
@@ -197,7 +227,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <input type="submit" value="Bestellen">
     </form>
 
+    <!-- Client-side logica: afhankelijke keuzelijsten en voorraadindicatie. -->
     <script>
+      // Voorraad vanuit PHP als JSON doorgeven aan JavaScript.
       const voorraadData = <?php echo json_encode($voorraadPerProduct); ?>;
 
       const klantSelect = document.getElementById('klantKeuze');
@@ -206,6 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       const telefoonInput = nieuweKlantVelden.querySelector('input[name="telefoonnummer"]');
       const emailInput = nieuweKlantVelden.querySelector('input[name="email"]');
 
+      // Toon/verberg de nieuwe-klantvelden en zet 'required' aan of uit.
       klantSelect.addEventListener('change', function () {
         const isNieuw = this.value === 'nieuw';
         nieuweKlantVelden.style.display = isNieuw ? 'block' : 'none';
@@ -219,6 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       const hoeveelheidInput = document.getElementById('hoeveelheid');
       const beschikbaarText = document.getElementById('beschikbaarText');
 
+      // Bij een nieuw product: kleurenlijst opnieuw opbouwen en velden resetten.
       productSelect.addEventListener('change', function () {
         const product = this.value;
 
@@ -237,6 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
       });
 
+      // Bij een kleur: toon de beschikbare kg en zet het maximum.
       kleurSelect.addEventListener('change', function () {
         const product = productSelect.value;
         const kleur = this.value;
